@@ -8,7 +8,7 @@ repos:
       full_name: ohmyzsh/ohmyzsh
       private: false
     lfs: false
-    release_limit: 10
+    release_limit: 1
     targets:
       gitee:
         enabled: false
