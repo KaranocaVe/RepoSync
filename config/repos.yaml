@@ -1,0 +1,42 @@
+defaults:
+  release_limit: 10
+  max_parallel: 3
+
+repos:
+  - id: ohmyzsh
+    source:
+      full_name: ohmyzsh/ohmyzsh
+      private: false
+    lfs: false
+    release_limit: 10
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: ohmyzsh
+        visibility: public
+        sync_releases: true
+
+# Example entry:
+# repos:
+#   - id: upstream-example
+#     source:
+#       full_name: owner/repo
+#       private: false
+#     lfs: false
+#     release_limit: 10
+#     targets:
+#       gitee:
+#         enabled: true
+#         namespace: your-gitee-namespace
+#         name: repo
+#         visibility: public
+#         sync_releases: true
+#       gitcode:
+#         enabled: true
+#         namespace: your-gitcode-namespace
+#         name: repo
+#         visibility: public
+#         sync_releases: true

@@ -1,0 +1,95 @@
+name: Repo Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "manifest reads config/repos.yaml, adhoc uses repo_spec_json"
+        required: false
+        default: manifest
+        type: choice
+        options:
+          - manifest
+          - adhoc
+      entry_ids:
+        description: "Optional comma-separated manifest entry IDs"
+        required: false
+        type: string
+      repo_spec_json:
+        description: "JSON payload for adhoc mode; same shape as one repos[] entry"
+        required: false
+        type: string
+  schedule:
+    - cron: "30 18 * * *"
+
+concurrency:
+  group: repo-sync
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve-config:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+      max_parallel: ${{ steps.resolve.outputs.max_parallel }}
+      has_entries: ${{ steps.resolve.outputs.has_entries }}
+    steps:
+      - name: Checkout control repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip -r requirements.txt
+
+      - name: Build sync matrix
+        id: resolve
+        env:
+          INPUT_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.mode || 'manifest' }}
+          INPUT_ENTRY_IDS: ${{ github.event_name == 'workflow_dispatch' && inputs.entry_ids || '' }}
+          INPUT_REPO_SPEC_JSON: ${{ github.event_name == 'workflow_dispatch' && inputs.repo_spec_json || '' }}
+        run: |
+          python scripts/repo_sync.py build-matrix \
+            --config config/repos.yaml \
+            --mode "$INPUT_MODE" \
+            --entry-ids "$INPUT_ENTRY_IDS" \
+            --repo-spec-json "$INPUT_REPO_SPEC_JSON" \
+            --github-output "$GITHUB_OUTPUT"
+
+  sync:
+    needs: resolve-config
+    if: needs.resolve-config.outputs.has_entries == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: ${{ fromJson(needs.resolve-config.outputs.max_parallel) }}
+      matrix: ${{ fromJson(needs.resolve-config.outputs.matrix) }}
+    steps:
+      - name: Checkout control repo
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install runtime dependencies
+        run: |
+          python -m pip install --upgrade pip -r requirements.txt
+          git lfs version || true
+
+      - name: Sync repository
+        env:
+          ENTRY_JSON: ${{ matrix.entry_json }}
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          SOURCE_GITHUB_TOKEN: ${{ secrets.SOURCE_GITHUB_TOKEN }}
+          ACTIONS_GITHUB_TOKEN: ${{ github.token }}
+        run: python scripts/repo_sync.py sync-entry --entry-json "$ENTRY_JSON"
