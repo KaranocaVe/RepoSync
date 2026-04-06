@@ -157,6 +157,15 @@ def maybe_json_loads(raw: str) -> Any:
         return raw
 
 
+def parse_api_error_body(body: str | None) -> Any:
+    if not body:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        return body
+
+
 def run_command(
     command: list[str],
     *,
@@ -812,6 +821,35 @@ class GitCodeTargetClient(BaseTargetClient):
     platform_name = "gitcode"
     api_base = GITCODE_API_BASE
     web_base = GITCODE_WEB_BASE
+
+    def is_not_found_error(self, exc: ApiError) -> bool:
+        if exc.status == 404:
+            return True
+        payload = parse_api_error_body(exc.body)
+        if isinstance(payload, dict):
+            error_code = payload.get("error_code")
+            message = str(payload.get("error_message", "")).lower()
+            if str(error_code) == "404":
+                return True
+            if "not found" in message or "project not found" in message:
+                return True
+        return False
+
+    def get_repo(self, namespace: str, repo_name: str) -> dict[str, Any] | None:
+        try:
+            return super().get_repo(namespace, repo_name)
+        except ApiError as exc:
+            if self.is_not_found_error(exc):
+                return None
+            raise
+
+    def get_release_by_tag(self, namespace: str, repo_name: str, tag_name: str) -> dict[str, Any] | None:
+        try:
+            return super().get_release_by_tag(namespace, repo_name, tag_name)
+        except ApiError as exc:
+            if self.is_not_found_error(exc):
+                return None
+            raise
 
     def update_release(self, namespace: str, repo_name: str, existing: dict[str, Any], release: dict[str, Any]) -> dict[str, Any]:
         raw = self.api_request(
