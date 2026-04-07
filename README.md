@@ -7,7 +7,7 @@ It supports:
 - Any public GitHub repository you can reference by `owner/repo`
 - Your own GitHub private repositories when `SOURCE_GITHUB_TOKEN` is configured with read access
 - Automatic target repository creation on GitCode and Gitee
-- Full git refs mirroring with `git clone --mirror` and `git push --mirror`
+- Branch and tag synchronization from a bare mirror clone, excluding GitHub-only refs such as `refs/pull/*`
 - Optional Git LFS sync per repository
 - Release synchronization for the latest `N` GitHub Releases, including metadata and attachments
 
@@ -106,7 +106,7 @@ For each entry the workflow:
 
 1. Reads GitHub repository metadata and recent Releases
 2. Creates the target repositories if they do not exist
-3. Mirrors all branches and tags to GitCode and Gitee
+3. Syncs all branches and tags to GitCode and Gitee, and deletes stale remote branches/tags
 4. Optionally syncs Git LFS objects
 5. Reconciles the latest configured Releases and uploads attachments
 
@@ -114,6 +114,7 @@ Each matrix job writes a per-repository summary into GitHub Actions step summary
 
 ## Current Scope
 
-- Syncs git refs, Releases, and optional LFS
+- Syncs branches, tags, Releases, and optional LFS
+- Intentionally does not sync GitHub pull-request refs such as `refs/pull/*`
 - Does not sync Issues, Pull Requests, Discussions, Wiki, Packages, or Actions artifacts
 - Release attachment replacement depends on target platform API behavior; the workflow recreates a Release when supported and otherwise updates metadata and uploads missing assets

@@ -33,6 +33,20 @@ TARGET_PLATFORMS = ("gitee", "gitcode")
 RETRYABLE_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
 RELEASE_ARCHIVE_URL_MARKERS = ("/-/archive/", "/repository/archive/", "/archive/refs/tags/")
 REPO_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+TRANSIENT_GIT_PUSH_MARKERS = (
+    "http 408",
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "rpc failed",
+    "unexpected disconnect",
+    "the remote end hung up unexpectedly",
+    "connection timed out",
+    "operation timed out",
+    "remote hung up unexpectedly",
+)
 
 
 class SyncError(RuntimeError):
@@ -187,6 +201,21 @@ def run_command(
         details = stderr or stdout or f"exit code {process.returncode}"
         raise SyncError(f"Command failed: {rendered}\n{details}")
     return process
+
+
+def run_command_result(
+    command: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
 
 
 def download_to_file(url: str, destination: Path, *, headers: dict[str, str] | None = None) -> None:
@@ -1043,14 +1072,116 @@ def add_remote(mirror_dir: Path, remote_name: str, remote_url: str) -> None:
     )
 
 
-def push_mirror(mirror_dir: Path, remote_name: str) -> None:
+def git_dir_command(mirror_dir: Path, *args: str) -> list[str]:
+    return ["git", "--git-dir", str(mirror_dir), *args]
+
+
+def list_local_refs(mirror_dir: Path, namespace: str) -> set[str]:
+    result = run_command(
+        git_dir_command(mirror_dir, "for-each-ref", "--format=%(refname)", namespace),
+        safe_command=f"git --git-dir {mirror_dir} for-each-ref {namespace}",
+    )
+    return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+
+def list_remote_refs(mirror_dir: Path, remote_name: str, mode_flag: str) -> set[str]:
+    result = run_command(
+        git_dir_command(mirror_dir, "ls-remote", mode_flag, remote_name),
+        safe_command=f"git --git-dir {mirror_dir} ls-remote {mode_flag} {remote_name}",
+    )
+    refs: set[str] = set()
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        ref_name = parts[1]
+        if ref_name.endswith("^{}"):
+            ref_name = ref_name[:-3]
+        refs.add(ref_name)
+    return refs
+
+
+def is_transient_git_push_failure(output: str) -> bool:
+    lowered = output.lower()
+    return any(marker in lowered for marker in TRANSIENT_GIT_PUSH_MARKERS)
+
+
+def push_git_refs(
+    mirror_dir: Path,
+    remote_name: str,
+    refspecs: list[str],
+    *,
+    delete: bool = False,
+    max_attempts: int = 3,
+) -> None:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    run_command(
-        ["git", "--git-dir", str(mirror_dir), "push", "--mirror", remote_name],
-        env=env,
-        safe_command=f"git --git-dir {mirror_dir} push --mirror {remote_name}",
+    command = git_dir_command(mirror_dir, "push", remote_name, *refspecs)
+    safe_refspecs = " ".join(refspecs)
+    if delete:
+        safe_command = f"git --git-dir {mirror_dir} push {remote_name} --delete [refs:{len(refspecs)}]"
+    else:
+        safe_command = f"git --git-dir {mirror_dir} push {remote_name} {safe_refspecs}"
+    for attempt in range(1, max_attempts + 1):
+        result = run_command_result(command, env=env)
+        if result.returncode == 0:
+            return
+        detail = "\n".join(part for part in (result.stderr.strip(), result.stdout.strip()) if part).strip()
+        detail = detail or f"exit code {result.returncode}"
+        if attempt < max_attempts and is_transient_git_push_failure(detail):
+            sleep_seconds = 2 ** attempt
+            log(
+                f"Transient push failure for {remote_name} on attempt {attempt}/{max_attempts}: "
+                f"{detail.splitlines()[-1]}. Retrying in {sleep_seconds}s"
+            )
+            time.sleep(sleep_seconds)
+            continue
+        raise SyncError(f"Command failed: {safe_command}\n{detail}")
+
+
+def batched(items: list[str], size: int) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def sync_ref_namespace(mirror_dir: Path, remote_name: str, namespace: str, *, remote_flag: str) -> tuple[int, int]:
+    local_refs = list_local_refs(mirror_dir, namespace)
+    remote_refs = list_remote_refs(mirror_dir, remote_name, remote_flag)
+    pushed = 0
+    deleted = 0
+    if local_refs:
+        push_git_refs(mirror_dir, remote_name, [f"+{namespace}/*:{namespace}/*"])
+        pushed = len(local_refs)
+    stale_refs = sorted(remote_refs - local_refs)
+    if stale_refs:
+        for ref_batch in batched([f":{ref_name}" for ref_name in stale_refs], size=100):
+            push_git_refs(mirror_dir, remote_name, ref_batch, delete=True)
+        deleted = len(stale_refs)
+    return pushed, deleted
+
+
+def push_selected_refs(mirror_dir: Path, remote_name: str) -> dict[str, int]:
+    branches_pushed, branches_deleted = sync_ref_namespace(
+        mirror_dir,
+        remote_name,
+        "refs/heads",
+        remote_flag="--heads",
     )
+    tags_pushed, tags_deleted = sync_ref_namespace(
+        mirror_dir,
+        remote_name,
+        "refs/tags",
+        remote_flag="--tags",
+    )
+    return {
+        "branches_pushed": branches_pushed,
+        "branches_deleted": branches_deleted,
+        "tags_pushed": tags_pushed,
+        "tags_deleted": tags_deleted,
+    }
+
+
+def push_mirror(mirror_dir: Path, remote_name: str) -> dict[str, int]:
+    return push_selected_refs(mirror_dir, remote_name)
 
 
 def ensure_git_lfs_available() -> None:
@@ -1274,8 +1405,12 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
 
                     remote_name = f"push-{platform_name}"
                     add_remote(mirror_dir, remote_name, client.authenticated_git_url(namespace, repo_name))
-                    push_mirror(mirror_dir, remote_name)
-                    summary.bullet(f"{platform_name}: git refs mirrored")
+                    ref_stats = push_mirror(mirror_dir, remote_name)
+                    summary.bullet(
+                        f"{platform_name}: branches synced={ref_stats['branches_pushed']} "
+                        f"deleted={ref_stats['branches_deleted']}, tags synced={ref_stats['tags_pushed']} "
+                        f"deleted={ref_stats['tags_deleted']} (refs/pull/* excluded)"
+                    )
 
                     if entry["lfs"]:
                         push_lfs(mirror_dir, remote_name)
