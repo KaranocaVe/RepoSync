@@ -31,7 +31,7 @@ repos:
       gitcode:
         enabled: true
         namespace: karanocave
-        name: ohmytmux
+        name: .tmux
         visibility: public
         sync_releases: true
 
