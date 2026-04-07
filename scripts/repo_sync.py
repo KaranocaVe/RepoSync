@@ -296,6 +296,7 @@ def curl_multipart_upload(
 
 
 def curl_raw_upload(url: str, file_path: Path, *, headers: dict[str, str] | None = None, method: str = "PUT") -> Any:
+    header_map = {str(key): str(value) for key, value in (headers or {}).items()}
     command = [
         "curl",
         "--silent",
@@ -307,9 +308,11 @@ def curl_raw_upload(url: str, file_path: Path, *, headers: dict[str, str] | None
         "--upload-file",
         str(file_path),
     ]
-    mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
-    command.extend(["--header", f"Content-Type: {mime_type}"])
-    for header_name, header_value in (headers or {}).items():
+    has_content_type = any(header_name.lower() == "content-type" for header_name in header_map)
+    if not has_content_type:
+        mime_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        command.extend(["--header", f"Content-Type: {mime_type}"])
+    for header_name, header_value in header_map.items():
         command.extend(["--header", f"{header_name}: {header_value}"])
     command.append(url)
     process = subprocess.run(command, text=True, capture_output=True)
