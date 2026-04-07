@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import mimetypes
 import os
@@ -708,10 +709,17 @@ class BaseTargetClient:
         return self._login
 
     def authenticated_git_url(self, namespace: str, repo_name: str) -> str:
-        username = quote_component(self.current_user_login())
-        token = quote_component(self.token)
+        return self.repository_git_url(namespace, repo_name)
+
+    def git_http_extra_headers(self) -> list[str]:
+        auth = f"{self.current_user_login()}:{self.token}".encode("utf-8")
+        encoded = base64.b64encode(auth).decode("ascii")
+        return [f"AUTHORIZATION: Basic {encoded}"]
+
+    def repository_git_url(self, namespace: str, repo_name: str) -> str:
         host = urllib.parse.urlsplit(self.web_base).netloc
-        return f"https://{username}:{token}@{host}/{namespace}/{repo_name}.git"
+        scheme = urllib.parse.urlsplit(self.web_base).scheme or "https"
+        return f"{scheme}://{host}/{quote_component(namespace)}/{quote_component(repo_name)}.git"
 
     def repository_web_url(self, namespace: str, repo_name: str) -> str:
         return f"{self.web_base}/{quote_component(namespace)}/{quote_component(repo_name)}"
@@ -1207,11 +1215,33 @@ def git_repo_command(repo_dir: Path, *args: str) -> list[str]:
     return ["git", "-C", str(repo_dir), *args]
 
 
-def clone_branch_worktree(remote_url: str, branch: str, destination: Path) -> None:
+def git_command_with_extra_headers(command: list[str], extra_headers: list[str] | None = None) -> list[str]:
+    if not extra_headers:
+        return command
+    if not command or command[0] != "git":
+        raise ValueError("git_command_with_extra_headers expects a git command")
+    rewritten = ["git"]
+    for header in extra_headers:
+        rewritten.extend(["-c", f"http.extraHeader={header}"])
+    rewritten.extend(command[1:])
+    return rewritten
+
+
+def clone_branch_worktree(
+    remote_url: str,
+    branch: str,
+    destination: Path,
+    *,
+    extra_headers: list[str] | None = None,
+) -> None:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    run_command(
+    command = git_command_with_extra_headers(
         ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", branch, remote_url, str(destination)],
+        extra_headers,
+    )
+    run_command(
+        command,
         env=env,
         safe_command=f"git clone --quiet --depth 1 --single-branch --branch {branch} [redacted-url] {destination}",
     )
@@ -1342,9 +1372,15 @@ def rewrite_target_readme_links(
         return ReadmeRewriteResult(status="missing-default-branch")
     namespace = target["namespace"]
     repo_name = target["name"]
+    extra_headers = client.git_http_extra_headers()
     with tempfile.TemporaryDirectory(prefix=f"{client.platform_name}-readme-", dir=str(workspace_root)) as clone_dir_name:
         clone_dir = Path(clone_dir_name)
-        clone_branch_worktree(client.authenticated_git_url(namespace, repo_name), default_branch, clone_dir)
+        clone_branch_worktree(
+            client.authenticated_git_url(namespace, repo_name),
+            default_branch,
+            clone_dir,
+            extra_headers=extra_headers,
+        )
         readme_path = find_root_readme_path(clone_dir)
         if readme_path is None:
             return ReadmeRewriteResult(status="missing-readme")
@@ -1389,7 +1425,10 @@ def rewrite_target_readme_links(
         env = os.environ.copy()
         env["GIT_TERMINAL_PROMPT"] = "0"
         run_command(
-            git_repo_command(clone_dir, "push", "origin", f"HEAD:{default_branch}"),
+            git_command_with_extra_headers(
+                git_repo_command(clone_dir, "push", "origin", f"HEAD:{default_branch}"),
+                extra_headers,
+            ),
             env=env,
             safe_command=f"git -C {clone_dir} push origin HEAD:{default_branch}",
         )
@@ -1449,8 +1488,18 @@ def list_local_refs(mirror_dir: Path, namespace: str) -> set[str]:
 
 
 def list_remote_refs(mirror_dir: Path, remote_name: str, mode_flag: str) -> set[str]:
+    return list_remote_refs_with_headers(mirror_dir, remote_name, mode_flag, extra_headers=None)
+
+
+def list_remote_refs_with_headers(
+    mirror_dir: Path,
+    remote_name: str,
+    mode_flag: str,
+    *,
+    extra_headers: list[str] | None,
+) -> set[str]:
     result = run_command(
-        git_dir_command(mirror_dir, "ls-remote", mode_flag, remote_name),
+        git_command_with_extra_headers(git_dir_command(mirror_dir, "ls-remote", mode_flag, remote_name), extra_headers),
         safe_command=f"git --git-dir {mirror_dir} ls-remote {mode_flag} {remote_name}",
     )
     refs: set[str] = set()
@@ -1477,10 +1526,11 @@ def push_git_refs(
     *,
     delete: bool = False,
     max_attempts: int = 3,
+    extra_headers: list[str] | None = None,
 ) -> None:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
-    command = git_dir_command(mirror_dir, "push", remote_name, *refspecs)
+    command = git_command_with_extra_headers(git_dir_command(mirror_dir, "push", remote_name, *refspecs), extra_headers)
     safe_refspecs = " ".join(refspecs)
     if delete:
         safe_command = f"git --git-dir {mirror_dir} push {remote_name} --delete [refs:{len(refspecs)}]"
@@ -1507,34 +1557,43 @@ def batched(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
 
 
-def sync_ref_namespace(mirror_dir: Path, remote_name: str, namespace: str, *, remote_flag: str) -> tuple[int, int]:
+def sync_ref_namespace(
+    mirror_dir: Path,
+    remote_name: str,
+    namespace: str,
+    *,
+    remote_flag: str,
+    extra_headers: list[str] | None = None,
+) -> tuple[int, int]:
     local_refs = list_local_refs(mirror_dir, namespace)
-    remote_refs = list_remote_refs(mirror_dir, remote_name, remote_flag)
+    remote_refs = list_remote_refs_with_headers(mirror_dir, remote_name, remote_flag, extra_headers=extra_headers)
     pushed = 0
     deleted = 0
     if local_refs:
-        push_git_refs(mirror_dir, remote_name, [f"+{namespace}/*:{namespace}/*"])
+        push_git_refs(mirror_dir, remote_name, [f"+{namespace}/*:{namespace}/*"], extra_headers=extra_headers)
         pushed = len(local_refs)
     stale_refs = sorted(remote_refs - local_refs)
     if stale_refs:
         for ref_batch in batched([f":{ref_name}" for ref_name in stale_refs], size=100):
-            push_git_refs(mirror_dir, remote_name, ref_batch, delete=True)
+            push_git_refs(mirror_dir, remote_name, ref_batch, delete=True, extra_headers=extra_headers)
         deleted = len(stale_refs)
     return pushed, deleted
 
 
-def push_selected_refs(mirror_dir: Path, remote_name: str) -> dict[str, int]:
+def push_selected_refs(mirror_dir: Path, remote_name: str, *, extra_headers: list[str] | None = None) -> dict[str, int]:
     branches_pushed, branches_deleted = sync_ref_namespace(
         mirror_dir,
         remote_name,
         "refs/heads",
         remote_flag="--heads",
+        extra_headers=extra_headers,
     )
     tags_pushed, tags_deleted = sync_ref_namespace(
         mirror_dir,
         remote_name,
         "refs/tags",
         remote_flag="--tags",
+        extra_headers=extra_headers,
     )
     return {
         "branches_pushed": branches_pushed,
@@ -1544,8 +1603,8 @@ def push_selected_refs(mirror_dir: Path, remote_name: str) -> dict[str, int]:
     }
 
 
-def push_mirror(mirror_dir: Path, remote_name: str) -> dict[str, int]:
-    return push_selected_refs(mirror_dir, remote_name)
+def push_mirror(mirror_dir: Path, remote_name: str, *, extra_headers: list[str] | None = None) -> dict[str, int]:
+    return push_selected_refs(mirror_dir, remote_name, extra_headers=extra_headers)
 
 
 def ensure_git_lfs_available() -> None:
@@ -1562,11 +1621,14 @@ def fetch_lfs(mirror_dir: Path) -> None:
     )
 
 
-def push_lfs(mirror_dir: Path, remote_name: str) -> None:
+def push_lfs(mirror_dir: Path, remote_name: str, *, extra_headers: list[str] | None = None) -> None:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     run_command(
-        ["git", "--git-dir", str(mirror_dir), "lfs", "push", "--all", remote_name],
+        git_command_with_extra_headers(
+            ["git", "--git-dir", str(mirror_dir), "lfs", "push", "--all", remote_name],
+            extra_headers,
+        ),
         env=env,
         safe_command=f"git --git-dir {mirror_dir} lfs push --all {remote_name}",
     )
@@ -1762,6 +1824,7 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
                 try:
                     client = build_target_client(platform_name)
                     repo_info, created = client.ensure_repo(target, repo_data)
+                    extra_headers = client.git_http_extra_headers()
                     summary.bullet(
                         f"{platform_name} repo {namespace}/{repo_name}: {'created' if created else 'already existed'} "
                         f"({repo_visibility(repo_info)})"
@@ -1769,7 +1832,7 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
 
                     remote_name = f"push-{platform_name}"
                     add_remote(mirror_dir, remote_name, client.authenticated_git_url(namespace, repo_name))
-                    ref_stats = push_mirror(mirror_dir, remote_name)
+                    ref_stats = push_mirror(mirror_dir, remote_name, extra_headers=extra_headers)
                     summary.bullet(
                         f"{platform_name}: branches synced={ref_stats['branches_pushed']} "
                         f"deleted={ref_stats['branches_deleted']}, tags synced={ref_stats['tags_pushed']} "
@@ -1777,7 +1840,7 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
                     )
 
                     if entry["lfs"]:
-                        push_lfs(mirror_dir, remote_name)
+                        push_lfs(mirror_dir, remote_name, extra_headers=extra_headers)
                         summary.bullet(f"{platform_name}: git lfs objects pushed")
 
                     client.post_push_finalize(target, repo_data, summary)

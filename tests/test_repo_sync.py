@@ -26,6 +26,9 @@ class LocalTestTargetClient(repo_sync.BaseTargetClient):
     def authenticated_git_url(self, namespace: str, repo_name: str) -> str:
         return self.remote_url
 
+    def git_http_extra_headers(self) -> list[str]:
+        return []
+
 
 class ConfigTests(unittest.TestCase):
     def test_load_config_defaults_rewrite_readme_links_false(self) -> None:
@@ -77,6 +80,15 @@ repos:
 
 
 class RewriteTests(unittest.TestCase):
+    def test_gitcode_uses_plain_remote_url_and_auth_header(self) -> None:
+        client = repo_sync.GitCodeTargetClient("token-value")
+        client._login = "karanocave"
+        self.assertEqual(client.authenticated_git_url("mirror", "repo"), "https://gitcode.com/mirror/repo.git")
+        headers = client.git_http_extra_headers()
+        self.assertEqual(len(headers), 1)
+        self.assertTrue(headers[0].startswith("AUTHORIZATION: Basic "))
+        self.assertNotIn("token-value", headers[0])
+
     def test_gitcode_rewrites_same_repo_links_only(self) -> None:
         client = repo_sync.GitCodeTargetClient("token")
         content = "\n".join(
