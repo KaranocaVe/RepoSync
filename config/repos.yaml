@@ -19,6 +19,70 @@ repos:
         visibility: public
         sync_releases: true
 
+  - id: ohmytmux
+    source:
+      full_name: gpakosz/.tmux
+      private: false
+    lfs: false
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: ohmytmux
+        visibility: public
+        sync_releases: true
+
+  - id: lazygit
+    source:
+      full_name: jesseduffield/lazygit
+      private: false
+    lfs: false
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: lazygit
+        visibility: public
+        sync_releases: true
+
+  - id: lazydocker
+    source:
+      full_name: jesseduffield/lazydocker
+      private: false
+    lfs: false
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: lazydocker
+        visibility: public
+        sync_releases: true
+
+  - id: btop
+    source:
+      full_name: aristocratos/btop
+      private: false
+    lfs: false
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: btop
+        visibility: public
+        sync_releases: true
+
 # Example entry:
 # repos:
 #   - id: upstream-example
