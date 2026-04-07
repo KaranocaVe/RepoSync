@@ -88,6 +88,23 @@ repos:
         rewrite_readme_links: true
         sync_releases: true
 
+  - id: frp
+    source:
+      full_name: fatedier/frp
+      private: false
+    lfs: false
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: frp
+        visibility: public
+        rewrite_readme_links: true
+        sync_releases: true
+
 # Example entry:
 # repos:
 #   - id: upstream-example
