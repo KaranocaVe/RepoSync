@@ -102,10 +102,10 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual(replacements, 6)
         self.assertIn("https://gitcode.com/mirror/repo", rewritten)
         self.assertIn("https://gitcode.com/mirror/repo.git", rewritten)
-        self.assertIn("https://gitcode.com/mirror/repo/-/blob/main/docs/guide.md#L1", rewritten)
-        self.assertIn("https://gitcode.com/mirror/repo/-/tree/main/docs", rewritten)
-        self.assertIn("https://gitcode.com/mirror/repo/-/raw/refs%2Fheads%2Fmain/tools/install.sh", rewritten)
-        self.assertIn("https://gitcode.com/mirror/repo/-/raw/main/assets/logo.svg", rewritten)
+        self.assertIn("https://gitcode.com/mirror/repo/blob/main/docs/guide.md#L1", rewritten)
+        self.assertIn("https://gitcode.com/mirror/repo/tree/main/docs", rewritten)
+        self.assertIn("https://raw.gitcode.com/mirror/repo/raw/main/tools/install.sh", rewritten)
+        self.assertIn("https://raw.gitcode.com/mirror/repo/raw/main/assets/logo.svg", rewritten)
         self.assertIn("https://github.com/other/repo/blob/main/README.md", rewritten)
         self.assertIn("https://github.com/owner/repo/issues/1", rewritten)
         self.assertIn("https://github.com/owner/repo/releases/download/v1.0.0/app.tar.gz", rewritten)
@@ -125,7 +125,7 @@ class RewriteTests(unittest.TestCase):
         )
         self.assertEqual(replacements, 2)
         self.assertIn("https://gitee.com/mirror/repo/tree/main/src", rewritten)
-        self.assertIn("https://gitee.com/mirror/repo/raw/refs%2Fheads%2Fmain/README.md", rewritten)
+        self.assertIn("https://gitee.com/mirror/repo/raw/main/README.md", rewritten)
 
 
 class ReadmeSelectionTests(unittest.TestCase):

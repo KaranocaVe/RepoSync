@@ -29,6 +29,7 @@ GITEE_API_BASE = "https://gitee.com/api/v5"
 GITEE_WEB_BASE = "https://gitee.com"
 GITCODE_API_BASE = "https://api.gitcode.com/api/v5"
 GITCODE_WEB_BASE = "https://gitcode.com"
+GITCODE_RAW_BASE = "https://raw.gitcode.com"
 TARGET_PLATFORMS = ("gitee", "gitcode")
 RETRYABLE_HTTP_CODES = {408, 425, 429, 500, 502, 503, 504}
 RELEASE_ARCHIVE_URL_MARKERS = ("/-/archive/", "/repository/archive/", "/archive/refs/tags/")
@@ -1026,20 +1027,23 @@ class GitCodeTargetClient(BaseTargetClient):
         encoded_ref = quote_component(ref)
         encoded_path = quote_repo_path(path)
         suffix = f"/{encoded_path}" if encoded_path else ""
-        return f"{self.repository_web_url(namespace, repo_name)}/-/blob/{encoded_ref}{suffix}"
+        return f"{self.repository_web_url(namespace, repo_name)}/blob/{encoded_ref}{suffix}"
 
     def tree_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
         encoded_ref = quote_component(ref)
         encoded_path = quote_repo_path(path)
         suffix = f"/{encoded_path}" if encoded_path else ""
-        return f"{self.repository_web_url(namespace, repo_name)}/-/tree/{encoded_ref}{suffix}"
+        return f"{self.repository_web_url(namespace, repo_name)}/tree/{encoded_ref}{suffix}"
 
     def raw_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
         encoded_ref = quote_component(ref)
         encoded_path = quote_repo_path(path)
         if not encoded_path:
             raise SyncError("raw README rewrite requires a non-empty path")
-        return f"{self.repository_web_url(namespace, repo_name)}/-/raw/{encoded_ref}/{encoded_path}"
+        return (
+            f"{GITCODE_RAW_BASE}/{quote_component(namespace)}/{quote_component(repo_name)}/raw/"
+            f"{encoded_ref}/{encoded_path}"
+        )
 
     def upload_release_asset(self, namespace: str, repo_name: str, release: dict[str, Any], file_path: Path) -> Any:
         release_tag = release["tag_name"]
@@ -1239,6 +1243,13 @@ def rewrite_github_repo_url(
     host = parsed.netloc.lower()
     path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
 
+    def normalize_symbolic_ref(ref: str) -> str:
+        if ref.startswith("refs/heads/"):
+            return ref[len("refs/heads/") :]
+        if ref.startswith("refs/tags/"):
+            return ref[len("refs/tags/") :]
+        return ref
+
     def match_repo_component(repo_component: str) -> tuple[bool, bool]:
         if repo_component.lower() == source_repo.lower():
             return True, False
@@ -1272,7 +1283,7 @@ def rewrite_github_repo_url(
             raw_ref_path = split_raw_ref_path(path_parts[3:])
             if raw_ref_path is not None:
                 ref, raw_path = raw_ref_path
-                rewritten = client.raw_web_url(namespace, repo_name, ref, raw_path)
+                rewritten = client.raw_web_url(namespace, repo_name, normalize_symbolic_ref(ref), raw_path)
         if rewritten is None:
             return None
         return with_original_query_fragment(rewritten, parsed)
@@ -1286,7 +1297,7 @@ def rewrite_github_repo_url(
         if raw_ref_path is None:
             return None
         ref, raw_path = raw_ref_path
-        rewritten = client.raw_web_url(namespace, repo_name, ref, raw_path)
+        rewritten = client.raw_web_url(namespace, repo_name, normalize_symbolic_ref(ref), raw_path)
         return with_original_query_fragment(rewritten, parsed)
     return None
 
