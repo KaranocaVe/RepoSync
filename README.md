@@ -118,3 +118,4 @@ Each matrix job writes a per-repository summary into GitHub Actions step summary
 - Intentionally does not sync GitHub pull-request refs such as `refs/pull/*`
 - Does not sync Issues, Pull Requests, Discussions, Wiki, Packages, or Actions artifacts
 - Release attachment replacement depends on target platform API behavior; the workflow recreates a Release when supported and otherwise updates metadata and uploads missing assets
+- GitCode may still report `empty_repo=true` on the repository overview even when branch and content APIs are populated; the workflow now surfaces that mismatch in the job summary

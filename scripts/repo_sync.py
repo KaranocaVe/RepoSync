@@ -703,11 +703,43 @@ class BaseTargetClient:
             "homepage": source_repo.get("homepage") or None,
             "private": target["visibility"] == "private",
             "auto_init": False,
+            "default_branch": source_repo.get("default_branch") or None,
         }
         created = self.api_request("POST", create_path, form=payload, expected=(200, 201))
         if not isinstance(created, dict):
             raise SyncError(f"Unexpected {self.platform_name} create repo response for {namespace}/{repo_name}")
         return created, True
+
+    def update_repo_settings(self, namespace: str, repo_name: str, settings: dict[str, Any]) -> dict[str, Any]:
+        raw = self.api_request(
+            "PATCH",
+            f"/repos/{namespace}/{repo_name}",
+            form=settings,
+            expected=(200,),
+        )
+        if not isinstance(raw, dict):
+            raise SyncError(f"Unexpected {self.platform_name} update repo response for {namespace}/{repo_name}")
+        return raw
+
+    def post_push_finalize(
+        self,
+        target: dict[str, Any],
+        source_repo: dict[str, Any],
+        summary: SummaryBuffer,
+    ) -> None:
+        desired_branch = source_repo.get("default_branch")
+        if not desired_branch:
+            return
+        namespace = target["namespace"]
+        repo_name = target["name"]
+        repo_info = self.get_repo(namespace, repo_name)
+        current_branch = repo_info.get("default_branch") if isinstance(repo_info, dict) else None
+        if current_branch == desired_branch:
+            return
+        updated = self.update_repo_settings(namespace, repo_name, {"default_branch": desired_branch})
+        summary.bullet(
+            f"{self.platform_name}: default branch set to {updated.get('default_branch') or desired_branch}"
+        )
 
     def list_releases(self, namespace: str, repo_name: str) -> list[dict[str, Any]]:
         raw = self.api_request(
@@ -894,6 +926,42 @@ class GitCodeTargetClient(BaseTargetClient):
         if fetched is None:
             raise SyncError(f"{self.platform_name} release {release['tag_name']} was not found after update")
         return fetched
+
+    def list_branches(self, namespace: str, repo_name: str) -> list[dict[str, Any]]:
+        raw = self.api_request(
+            "GET",
+            f"/repos/{namespace}/{repo_name}/branches",
+            expected=(200,),
+        )
+        if not isinstance(raw, list):
+            raise SyncError(f"Unexpected gitcode branches response for {namespace}/{repo_name}")
+        return [item for item in raw if isinstance(item, dict)]
+
+    def post_push_finalize(
+        self,
+        target: dict[str, Any],
+        source_repo: dict[str, Any],
+        summary: SummaryBuffer,
+    ) -> None:
+        namespace = target["namespace"]
+        repo_name = target["name"]
+        desired_branch = source_repo.get("default_branch")
+        if desired_branch:
+            updated = self.update_repo_settings(namespace, repo_name, {"default_branch": desired_branch})
+            branch_value = updated.get("default_branch") or desired_branch
+            summary.bullet(f"{self.platform_name}: default branch confirmed as {branch_value}")
+        branches = self.list_branches(namespace, repo_name)
+        branch_names = {item.get("name") for item in branches}
+        if desired_branch and desired_branch not in branch_names:
+            raise SyncError(
+                f"gitcode branch verification failed: expected {desired_branch} in branches, got {sorted(branch_names)}"
+            )
+        repo_info = self.get_repo(namespace, repo_name)
+        if isinstance(repo_info, dict) and repo_info.get("empty_repo") is True:
+            summary.bullet(
+                "gitcode: branch and content APIs are populated, but repository metadata still reports "
+                "empty_repo=true; the root page and plain git clone may still look empty"
+            )
 
     def upload_release_asset(self, namespace: str, repo_name: str, release: dict[str, Any], file_path: Path) -> Any:
         release_tag = release["tag_name"]
