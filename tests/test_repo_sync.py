@@ -122,6 +122,13 @@ class RewriteTests(unittest.TestCase):
         self.assertIn("https://github.com/owner/repo/issues/1", rewritten)
         self.assertIn("https://github.com/owner/repo/releases/download/v1.0.0/app.tar.gz", rewritten)
 
+    def test_gitcode_upload_candidate_parsing_tolerates_malformed_url(self) -> None:
+        client = repo_sync.GitCodeTargetClient("token")
+        candidates = client.extract_upload_candidates({"upload_url": "https://[bad-upload-url"})
+        self.assertEqual(len(candidates), 2)
+        self.assertEqual(candidates[0]["strategy"], "raw")
+        self.assertEqual(candidates[1]["strategy"], "multipart")
+
     def test_gitee_rewrites_same_repo_links_only(self) -> None:
         client = repo_sync.GiteeTargetClient("token")
         content = (

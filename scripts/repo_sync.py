@@ -1184,7 +1184,10 @@ def dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def is_probably_presigned_url(url: str) -> bool:
     lowered = url.lower()
-    parsed = urllib.parse.urlsplit(lowered)
+    try:
+        parsed = urllib.parse.urlsplit(lowered)
+    except ValueError:
+        return True
     host = parsed.netloc
     if host not in {urllib.parse.urlsplit(GITCODE_API_BASE).netloc, urllib.parse.urlsplit(GITCODE_WEB_BASE).netloc}:
         return True
