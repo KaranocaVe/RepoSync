@@ -129,6 +129,27 @@ class RewriteTests(unittest.TestCase):
         self.assertEqual(candidates[0]["strategy"], "raw")
         self.assertEqual(candidates[1]["strategy"], "multipart")
 
+    def test_gitcode_rewrite_ignores_invalid_ipv6_placeholder_urls(self) -> None:
+        client = repo_sync.GitCodeTargetClient("token")
+        content = "\n".join(
+            [
+                "placeholder http://[serverAddr]:7500 should stay",
+                "placeholder https://[serverAddr]:7500 should stay",
+                "repo https://github.com/fatedier/frp/blob/master/README.md",
+            ]
+        )
+        rewritten, replacements = repo_sync.rewrite_readme_links(
+            content,
+            source_full_name="fatedier/frp",
+            client=client,
+            namespace="karanocave",
+            repo_name="frp",
+        )
+        self.assertEqual(replacements, 1)
+        self.assertIn("http://[serverAddr]:7500", rewritten)
+        self.assertIn("https://[serverAddr]:7500", rewritten)
+        self.assertIn("https://gitcode.com/karanocave/frp/blob/master/README.md", rewritten)
+
     def test_gitee_rewrites_same_repo_links_only(self) -> None:
         client = repo_sync.GiteeTargetClient("token")
         content = (

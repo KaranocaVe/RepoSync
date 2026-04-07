@@ -1272,7 +1272,10 @@ def rewrite_github_repo_url(
     repo_name: str,
 ) -> str | None:
     source_owner, source_repo = source_full_name.split("/", 1)
-    parsed = urllib.parse.urlsplit(url)
+    try:
+        parsed = urllib.parse.urlsplit(url)
+    except ValueError:
+        return None
     host = parsed.netloc.lower()
     path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
 
