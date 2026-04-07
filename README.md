@@ -122,7 +122,7 @@ Each matrix job writes a per-repository summary into GitHub Actions step summary
 ## Current Scope
 
 - Syncs branches, tags, Releases, and optional LFS
-- Optionally rewrites only the root README and only for same-repo GitHub repo/blob/tree/raw links
+- Optionally rewrites only the root README and only for same-repo GitHub repo, clone, blob, tree, and raw links
 - Intentionally does not sync GitHub pull-request refs such as `refs/pull/*`
 - Does not sync Issues, Pull Requests, Discussions, Wiki, Packages, or Actions artifacts
 - Release attachment replacement depends on target platform API behavior; the workflow recreates a Release when supported and otherwise updates metadata and uploads missing assets

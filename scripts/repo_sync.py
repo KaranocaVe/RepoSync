@@ -1238,27 +1238,55 @@ def rewrite_github_repo_url(
     parsed = urllib.parse.urlsplit(url)
     host = parsed.netloc.lower()
     path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+
+    def match_repo_component(repo_component: str) -> tuple[bool, bool]:
+        if repo_component.lower() == source_repo.lower():
+            return True, False
+        if repo_component.lower().endswith(".git") and repo_component[:-4].lower() == source_repo.lower():
+            return True, True
+        return False, False
+
+    def split_raw_ref_path(parts: list[str]) -> tuple[str, str] | None:
+        if len(parts) < 2:
+            return None
+        if len(parts) >= 4 and parts[0] == "refs" and parts[1] in {"heads", "tags"}:
+            return "/".join(parts[:3]), "/".join(parts[3:])
+        return parts[0], "/".join(parts[1:])
+
     if host in GITHUB_WEB_HOSTS:
         if len(path_parts) < 2:
             return None
-        if path_parts[0].lower() != source_owner.lower() or path_parts[1].lower() != source_repo.lower():
+        repo_matches, keep_git_suffix = match_repo_component(path_parts[1])
+        if path_parts[0].lower() != source_owner.lower() or not repo_matches:
             return None
         rewritten: str | None = None
         if len(path_parts) == 2:
             rewritten = client.repository_web_url(namespace, repo_name)
+            if keep_git_suffix:
+                rewritten = f"{rewritten}.git"
         elif path_parts[2] == "blob" and len(path_parts) >= 5:
             rewritten = client.blob_web_url(namespace, repo_name, path_parts[3], "/".join(path_parts[4:]))
         elif path_parts[2] == "tree" and len(path_parts) >= 4:
             rewritten = client.tree_web_url(namespace, repo_name, path_parts[3], "/".join(path_parts[4:]))
+        elif path_parts[2] == "raw" and len(path_parts) >= 5:
+            raw_ref_path = split_raw_ref_path(path_parts[3:])
+            if raw_ref_path is not None:
+                ref, raw_path = raw_ref_path
+                rewritten = client.raw_web_url(namespace, repo_name, ref, raw_path)
         if rewritten is None:
             return None
         return with_original_query_fragment(rewritten, parsed)
     if host in GITHUB_RAW_HOSTS:
         if len(path_parts) < 4:
             return None
-        if path_parts[0].lower() != source_owner.lower() or path_parts[1].lower() != source_repo.lower():
+        repo_matches, _ = match_repo_component(path_parts[1])
+        if path_parts[0].lower() != source_owner.lower() or not repo_matches:
             return None
-        rewritten = client.raw_web_url(namespace, repo_name, path_parts[2], "/".join(path_parts[3:]))
+        raw_ref_path = split_raw_ref_path(path_parts[2:])
+        if raw_ref_path is None:
+            return None
+        ref, raw_path = raw_ref_path
+        rewritten = client.raw_web_url(namespace, repo_name, ref, raw_path)
         return with_original_query_fragment(rewritten, parsed)
     return None
 

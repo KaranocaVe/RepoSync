@@ -82,8 +82,10 @@ class RewriteTests(unittest.TestCase):
         content = "\n".join(
             [
                 "repo https://github.com/owner/repo",
+                "clone https://github.com/owner/repo.git",
                 "blob https://github.com/owner/repo/blob/main/docs/guide.md#L1",
                 "tree https://github.com/owner/repo/tree/main/docs",
+                "web-raw https://github.com/owner/repo/raw/refs/heads/main/tools/install.sh",
                 "raw https://raw.githubusercontent.com/owner/repo/main/assets/logo.svg",
                 "external https://github.com/other/repo/blob/main/README.md",
                 "issues https://github.com/owner/repo/issues/1",
@@ -97,10 +99,12 @@ class RewriteTests(unittest.TestCase):
             namespace="mirror",
             repo_name="repo",
         )
-        self.assertEqual(replacements, 4)
+        self.assertEqual(replacements, 6)
         self.assertIn("https://gitcode.com/mirror/repo", rewritten)
+        self.assertIn("https://gitcode.com/mirror/repo.git", rewritten)
         self.assertIn("https://gitcode.com/mirror/repo/-/blob/main/docs/guide.md#L1", rewritten)
         self.assertIn("https://gitcode.com/mirror/repo/-/tree/main/docs", rewritten)
+        self.assertIn("https://gitcode.com/mirror/repo/-/raw/refs%2Fheads%2Fmain/tools/install.sh", rewritten)
         self.assertIn("https://gitcode.com/mirror/repo/-/raw/main/assets/logo.svg", rewritten)
         self.assertIn("https://github.com/other/repo/blob/main/README.md", rewritten)
         self.assertIn("https://github.com/owner/repo/issues/1", rewritten)
@@ -108,7 +112,10 @@ class RewriteTests(unittest.TestCase):
 
     def test_gitee_rewrites_same_repo_links_only(self) -> None:
         client = repo_sync.GiteeTargetClient("token")
-        content = "See https://github.com/owner/repo/tree/main/src and https://raw.githubusercontent.com/owner/repo/main/README.md"
+        content = (
+            "See https://github.com/owner/repo/tree/main/src "
+            "and https://raw.githubusercontent.com/owner/repo/refs/heads/main/README.md"
+        )
         rewritten, replacements = repo_sync.rewrite_readme_links(
             content,
             source_full_name="owner/repo",
@@ -118,7 +125,7 @@ class RewriteTests(unittest.TestCase):
         )
         self.assertEqual(replacements, 2)
         self.assertIn("https://gitee.com/mirror/repo/tree/main/src", rewritten)
-        self.assertIn("https://gitee.com/mirror/repo/raw/main/README.md", rewritten)
+        self.assertIn("https://gitee.com/mirror/repo/raw/refs%2Fheads%2Fmain/README.md", rewritten)
 
 
 class ReadmeSelectionTests(unittest.TestCase):
