@@ -17,6 +17,7 @@ repos:
         namespace: karanocave
         name: ohmyzsh
         visibility: public
+        rewrite_readme_links: true
         sync_releases: true
 
   - id: ohmytmux
@@ -33,6 +34,7 @@ repos:
         namespace: karanocave
         name: .tmux
         visibility: public
+        rewrite_readme_links: true
         sync_releases: true
 
   - id: lazygit
@@ -49,6 +51,7 @@ repos:
         namespace: karanocave
         name: lazygit
         visibility: public
+        rewrite_readme_links: true
         sync_releases: true
 
   - id: lazydocker
@@ -65,6 +68,7 @@ repos:
         namespace: karanocave
         name: lazydocker
         visibility: public
+        rewrite_readme_links: true
         sync_releases: true
 
   - id: btop
@@ -81,6 +85,7 @@ repos:
         namespace: karanocave
         name: btop
         visibility: public
+        rewrite_readme_links: true
         sync_releases: true
 
 # Example entry:
@@ -97,10 +102,12 @@ repos:
 #         namespace: your-gitee-namespace
 #         name: repo
 #         visibility: public
+#         rewrite_readme_links: false
 #         sync_releases: true
 #       gitcode:
 #         enabled: true
 #         namespace: your-gitcode-namespace
 #         name: repo
 #         visibility: public
+#         rewrite_readme_links: false
 #         sync_releases: true

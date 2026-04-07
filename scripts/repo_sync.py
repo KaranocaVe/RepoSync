@@ -47,6 +47,13 @@ TRANSIENT_GIT_PUSH_MARKERS = (
     "operation timed out",
     "remote hung up unexpectedly",
 )
+README_CANDIDATES = ("README.md", "README.rst", "README.txt", "README")
+GITHUB_WEB_HOSTS = {"github.com", "www.github.com"}
+GITHUB_RAW_HOSTS = {"raw.githubusercontent.com"}
+TRAILING_URL_PUNCTUATION = ".,;:!?"
+URL_PATTERN = re.compile(r"https?://[^\s<>'\"\)\]]+")
+REWRITE_COMMIT_NAME = "repo-sync[bot]"
+REWRITE_COMMIT_EMAIL = "repo-sync[bot]@users.noreply.github.com"
 
 
 class SyncError(RuntimeError):
@@ -69,6 +76,13 @@ class AssetComparison:
     extra: list[str]
     changed: list[str]
     unknown_size: list[str]
+
+
+@dataclass
+class ReadmeRewriteResult:
+    status: str
+    readme_name: str | None = None
+    replacements: int = 0
 
 
 class SummaryBuffer:
@@ -386,6 +400,24 @@ def origin(url: str) -> str:
     return f"{parts.scheme}://{parts.netloc}"
 
 
+def quote_repo_path(path: str) -> str:
+    if not path:
+        return ""
+    return "/".join(quote_component(segment) for segment in path.split("/") if segment)
+
+
+def with_original_query_fragment(url: str, original: urllib.parse.SplitResult) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, parsed.path, original.query, original.fragment))
+
+
+def split_trailing_url_punctuation(url: str) -> tuple[str, str]:
+    end = len(url)
+    while end > 0 and url[end - 1] in TRAILING_URL_PUNCTUATION:
+        end -= 1
+    return url[:end], url[end:]
+
+
 def load_config(path: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     if not path.exists():
         raise SyncError(f"Config file does not exist: {path}")
@@ -458,6 +490,7 @@ def normalize_target(raw: Any, *, platform: str, location: str) -> dict[str, Any
             "name": "",
             "visibility": "public",
             "sync_releases": False,
+            "rewrite_readme_links": False,
         }
     if not isinstance(raw, dict):
         raise SyncError(f"{location} must be a mapping")
@@ -468,6 +501,7 @@ def normalize_target(raw: Any, *, platform: str, location: str) -> dict[str, Any
         "name": str(raw.get("name", "")).strip(),
         "visibility": str(raw.get("visibility", "public")).strip().lower(),
         "sync_releases": as_bool(raw.get("sync_releases"), default=True if enabled else False),
+        "rewrite_readme_links": as_bool(raw.get("rewrite_readme_links"), default=False),
     }
     if not enabled:
         return target
@@ -677,6 +711,28 @@ class BaseTargetClient:
         token = quote_component(self.token)
         host = urllib.parse.urlsplit(self.web_base).netloc
         return f"https://{username}:{token}@{host}/{namespace}/{repo_name}.git"
+
+    def repository_web_url(self, namespace: str, repo_name: str) -> str:
+        return f"{self.web_base}/{quote_component(namespace)}/{quote_component(repo_name)}"
+
+    def blob_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        suffix = f"/{encoded_path}" if encoded_path else ""
+        return f"{self.repository_web_url(namespace, repo_name)}/blob/{encoded_ref}{suffix}"
+
+    def tree_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        suffix = f"/{encoded_path}" if encoded_path else ""
+        return f"{self.repository_web_url(namespace, repo_name)}/tree/{encoded_ref}{suffix}"
+
+    def raw_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        if not encoded_path:
+            raise SyncError("raw README rewrite requires a non-empty path")
+        return f"{self.repository_web_url(namespace, repo_name)}/raw/{encoded_ref}/{encoded_path}"
 
     def get_repo(self, namespace: str, repo_name: str) -> dict[str, Any] | None:
         repo = self.api_request("GET", f"/repos/{namespace}/{repo_name}", expected=(200,), allow_404=True)
@@ -966,6 +1022,25 @@ class GitCodeTargetClient(BaseTargetClient):
                 "empty_repo=true; the root page and plain git clone may still look empty"
             )
 
+    def blob_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        suffix = f"/{encoded_path}" if encoded_path else ""
+        return f"{self.repository_web_url(namespace, repo_name)}/-/blob/{encoded_ref}{suffix}"
+
+    def tree_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        suffix = f"/{encoded_path}" if encoded_path else ""
+        return f"{self.repository_web_url(namespace, repo_name)}/-/tree/{encoded_ref}{suffix}"
+
+    def raw_web_url(self, namespace: str, repo_name: str, ref: str, path: str) -> str:
+        encoded_ref = quote_component(ref)
+        encoded_path = quote_repo_path(path)
+        if not encoded_path:
+            raise SyncError("raw README rewrite requires a non-empty path")
+        return f"{self.repository_web_url(namespace, repo_name)}/-/raw/{encoded_ref}/{encoded_path}"
+
     def upload_release_asset(self, namespace: str, repo_name: str, release: dict[str, Any], file_path: Path) -> Any:
         release_tag = release["tag_name"]
         upload_meta = self.api_request(
@@ -1122,6 +1197,184 @@ def build_target_client(platform: str) -> BaseTargetClient:
     if platform == "gitcode":
         return GitCodeTargetClient(os.getenv("GITCODE_TOKEN", "").strip())
     raise SyncError(f"Unsupported platform: {platform}")
+
+
+def git_repo_command(repo_dir: Path, *args: str) -> list[str]:
+    return ["git", "-C", str(repo_dir), *args]
+
+
+def clone_branch_worktree(remote_url: str, branch: str, destination: Path) -> None:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    run_command(
+        ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", branch, remote_url, str(destination)],
+        env=env,
+        safe_command=f"git clone --quiet --depth 1 --single-branch --branch {branch} [redacted-url] {destination}",
+    )
+
+
+def find_root_readme_path(root_dir: Path) -> Path | None:
+    files_by_lower_name: dict[str, list[Path]] = {}
+    for path in sorted(root_dir.iterdir(), key=lambda item: item.name.lower()):
+        if not path.is_file():
+            continue
+        files_by_lower_name.setdefault(path.name.lower(), []).append(path)
+    for candidate in README_CANDIDATES:
+        matches = files_by_lower_name.get(candidate.lower())
+        if matches:
+            return matches[0]
+    return None
+
+
+def rewrite_github_repo_url(
+    url: str,
+    *,
+    source_full_name: str,
+    client: BaseTargetClient,
+    namespace: str,
+    repo_name: str,
+) -> str | None:
+    source_owner, source_repo = source_full_name.split("/", 1)
+    parsed = urllib.parse.urlsplit(url)
+    host = parsed.netloc.lower()
+    path_parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
+    if host in GITHUB_WEB_HOSTS:
+        if len(path_parts) < 2:
+            return None
+        if path_parts[0].lower() != source_owner.lower() or path_parts[1].lower() != source_repo.lower():
+            return None
+        rewritten: str | None = None
+        if len(path_parts) == 2:
+            rewritten = client.repository_web_url(namespace, repo_name)
+        elif path_parts[2] == "blob" and len(path_parts) >= 5:
+            rewritten = client.blob_web_url(namespace, repo_name, path_parts[3], "/".join(path_parts[4:]))
+        elif path_parts[2] == "tree" and len(path_parts) >= 4:
+            rewritten = client.tree_web_url(namespace, repo_name, path_parts[3], "/".join(path_parts[4:]))
+        if rewritten is None:
+            return None
+        return with_original_query_fragment(rewritten, parsed)
+    if host in GITHUB_RAW_HOSTS:
+        if len(path_parts) < 4:
+            return None
+        if path_parts[0].lower() != source_owner.lower() or path_parts[1].lower() != source_repo.lower():
+            return None
+        rewritten = client.raw_web_url(namespace, repo_name, path_parts[2], "/".join(path_parts[3:]))
+        return with_original_query_fragment(rewritten, parsed)
+    return None
+
+
+def rewrite_readme_links(
+    content: str,
+    *,
+    source_full_name: str,
+    client: BaseTargetClient,
+    namespace: str,
+    repo_name: str,
+) -> tuple[str, int]:
+    replacements = 0
+
+    def replace(match: re.Match[str]) -> str:
+        nonlocal replacements
+        original = match.group(0)
+        stripped, trailing = split_trailing_url_punctuation(original)
+        rewritten = rewrite_github_repo_url(
+            stripped,
+            source_full_name=source_full_name,
+            client=client,
+            namespace=namespace,
+            repo_name=repo_name,
+        )
+        if rewritten and rewritten != stripped:
+            replacements += 1
+            return f"{rewritten}{trailing}"
+        return original
+
+    return URL_PATTERN.sub(replace, content), replacements
+
+
+def rewrite_target_readme_links(
+    client: BaseTargetClient,
+    target: dict[str, Any],
+    source_repo: dict[str, Any],
+    workspace_root: Path,
+) -> ReadmeRewriteResult:
+    default_branch = str(source_repo.get("default_branch") or "").strip()
+    if not default_branch:
+        return ReadmeRewriteResult(status="missing-default-branch")
+    namespace = target["namespace"]
+    repo_name = target["name"]
+    with tempfile.TemporaryDirectory(prefix=f"{client.platform_name}-readme-", dir=str(workspace_root)) as clone_dir_name:
+        clone_dir = Path(clone_dir_name)
+        clone_branch_worktree(client.authenticated_git_url(namespace, repo_name), default_branch, clone_dir)
+        readme_path = find_root_readme_path(clone_dir)
+        if readme_path is None:
+            return ReadmeRewriteResult(status="missing-readme")
+        try:
+            with open(readme_path, "r", encoding="utf-8", newline="") as handle:
+                original_content = handle.read()
+        except UnicodeDecodeError:
+            return ReadmeRewriteResult(status="non-utf8", readme_name=readme_path.name)
+        rewritten_content, replacements = rewrite_readme_links(
+            original_content,
+            source_full_name=source_repo["full_name"],
+            client=client,
+            namespace=namespace,
+            repo_name=repo_name,
+        )
+        if rewritten_content == original_content:
+            return ReadmeRewriteResult(status="unchanged", readme_name=readme_path.name, replacements=replacements)
+        with open(readme_path, "w", encoding="utf-8", newline="") as handle:
+            handle.write(rewritten_content)
+        relative_readme = readme_path.relative_to(clone_dir)
+        run_command(
+            git_repo_command(clone_dir, "config", "user.name", REWRITE_COMMIT_NAME),
+            safe_command=f"git -C {clone_dir} config user.name {REWRITE_COMMIT_NAME}",
+        )
+        run_command(
+            git_repo_command(clone_dir, "config", "user.email", REWRITE_COMMIT_EMAIL),
+            safe_command=f"git -C {clone_dir} config user.email {REWRITE_COMMIT_EMAIL}",
+        )
+        run_command(
+            git_repo_command(clone_dir, "add", "--", str(relative_readme)),
+            safe_command=f"git -C {clone_dir} add -- {relative_readme}",
+        )
+        run_command(
+            git_repo_command(
+                clone_dir,
+                "commit",
+                "-m",
+                f"chore(repo-sync): rewrite README links for {client.platform_name}",
+            ),
+            safe_command=f"git -C {clone_dir} commit -m 'chore(repo-sync): rewrite README links for {client.platform_name}'",
+        )
+        env = os.environ.copy()
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        run_command(
+            git_repo_command(clone_dir, "push", "origin", f"HEAD:{default_branch}"),
+            env=env,
+            safe_command=f"git -C {clone_dir} push origin HEAD:{default_branch}",
+        )
+        return ReadmeRewriteResult(status="committed", readme_name=readme_path.name, replacements=replacements)
+
+
+def summarize_readme_rewrite(summary: SummaryBuffer, platform_name: str, result: ReadmeRewriteResult) -> None:
+    if result.status == "missing-default-branch":
+        summary.bullet(f"{platform_name}: README rewrite skipped because the source default branch is unknown")
+    elif result.status == "missing-readme":
+        summary.bullet(f"{platform_name}: README rewrite skipped because no root README file was found")
+    elif result.status == "non-utf8":
+        summary.bullet(f"{platform_name}: {result.readme_name} rewrite skipped because the file is not valid UTF-8")
+    elif result.status == "unchanged":
+        summary.bullet(
+            f"{platform_name}: {result.readme_name} had no same-repo GitHub links that needed rewriting"
+        )
+    elif result.status == "committed":
+        summary.bullet(
+            f"{platform_name}: {result.readme_name} rewritten for target links "
+            f"({result.replacements} URLs) via a target-only commit"
+        )
+    else:
+        raise SyncError(f"Unexpected README rewrite result status: {result.status}")
 
 
 def mirror_clone(source_client: GitHubSourceClient, destination: Path) -> None:
@@ -1487,6 +1740,14 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
                     if entry["lfs"]:
                         push_lfs(mirror_dir, remote_name)
                         summary.bullet(f"{platform_name}: git lfs objects pushed")
+
+                    client.post_push_finalize(target, repo_data, summary)
+
+                    if target.get("rewrite_readme_links"):
+                        rewrite_result = rewrite_target_readme_links(client, target, repo_data, temp_dir)
+                        summarize_readme_rewrite(summary, platform_name, rewrite_result)
+                    else:
+                        summary.bullet(f"{platform_name}: README link rewrite disabled for this target")
 
                     if target["sync_releases"]:
                         release_stats = sync_releases_to_target(

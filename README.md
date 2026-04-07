@@ -9,6 +9,7 @@ It supports:
 - Automatic target repository creation on GitCode and Gitee
 - Branch and tag synchronization from a bare mirror clone, excluding GitHub-only refs such as `refs/pull/*`
 - Optional Git LFS sync per repository
+- Optional README link rewriting so same-repo GitHub links point at the target platform
 - Release synchronization for the latest `N` GitHub Releases, including metadata and attachments
 
 ## Files
@@ -47,12 +48,14 @@ repos:
         namespace: your-gitee-namespace
         name: repo
         visibility: public
+        rewrite_readme_links: false
         sync_releases: true
       gitcode:
         enabled: true
         namespace: your-gitcode-namespace
         name: repo
         visibility: public
+        rewrite_readme_links: false
         sync_releases: true
 ```
 
@@ -62,6 +65,7 @@ Notes:
 - `source.private: true` requires `SOURCE_GITHUB_TOKEN`
 - `visibility` is `public` or `private`
 - `lfs: true` enables `git lfs fetch --all` and `git lfs push --all`
+- `rewrite_readme_links: true` rewrites same-repo GitHub links in the root README after mirror push; this adds one target-only commit on the target default branch
 - `release_limit` overrides the default for that repository
 
 ## Manual Runs
@@ -87,6 +91,7 @@ Example adhoc payload:
       "namespace": "your-gitee-namespace",
       "name": "repo",
       "visibility": "public",
+      "rewrite_readme_links": false,
       "sync_releases": true
     },
     "gitcode": {
@@ -94,6 +99,7 @@ Example adhoc payload:
       "namespace": "your-gitcode-namespace",
       "name": "repo",
       "visibility": "public",
+      "rewrite_readme_links": false,
       "sync_releases": true
     }
   }
@@ -108,14 +114,17 @@ For each entry the workflow:
 2. Creates the target repositories if they do not exist
 3. Syncs all branches and tags to GitCode and Gitee, and deletes stale remote branches/tags
 4. Optionally syncs Git LFS objects
-5. Reconciles the latest configured Releases and uploads attachments
+5. Optionally rewrites same-repo GitHub links in the root README to target-platform links and pushes a target-only commit
+6. Reconciles the latest configured Releases and uploads attachments
 
 Each matrix job writes a per-repository summary into GitHub Actions step summary.
 
 ## Current Scope
 
 - Syncs branches, tags, Releases, and optional LFS
+- Optionally rewrites only the root README and only for same-repo GitHub repo/blob/tree/raw links
 - Intentionally does not sync GitHub pull-request refs such as `refs/pull/*`
 - Does not sync Issues, Pull Requests, Discussions, Wiki, Packages, or Actions artifacts
 - Release attachment replacement depends on target platform API behavior; the workflow recreates a Release when supported and otherwise updates metadata and uploads missing assets
+- README rewriting intentionally makes the target default branch diverge from the source by one target-only commit when enabled
 - GitCode may still report `empty_repo=true` on the repository overview even when branch and content APIs are populated; the workflow now surfaces that mismatch in the job summary
