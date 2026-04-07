@@ -968,6 +968,7 @@ class GitCodeTargetClient(BaseTargetClient):
         upload_meta = self.api_request(
             "GET",
             f"/repos/{namespace}/{repo_name}/releases/{quote_component(release_tag)}/upload_url",
+            params={"file_name": file_path.name},
             expected=(200,),
             allow_404=True,
         )
