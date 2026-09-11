@@ -1838,16 +1838,19 @@ def handle_sync_entry(args: argparse.Namespace) -> None:
 
                     remote_name = f"push-{platform_name}"
                     add_remote(mirror_dir, remote_name, client.authenticated_git_url(namespace, repo_name))
+                    # GitCode validates LFS reachability in its pre-receive hook.
+                    # Upload objects before creating refs that point at them;
+                    # otherwise an otherwise valid mirror push is rejected as
+                    # "LFS objects are missing".
+                    if entry["lfs"]:
+                        push_lfs(mirror_dir, remote_name, extra_headers=extra_headers)
+                        summary.bullet(f"{platform_name}: git lfs objects pushed")
                     ref_stats = push_mirror(mirror_dir, remote_name, extra_headers=extra_headers)
                     summary.bullet(
                         f"{platform_name}: branches synced={ref_stats['branches_pushed']} "
                         f"deleted={ref_stats['branches_deleted']}, tags synced={ref_stats['tags_pushed']} "
                         f"deleted={ref_stats['tags_deleted']} (refs/pull/* excluded)"
                     )
-
-                    if entry["lfs"]:
-                        push_lfs(mirror_dir, remote_name, extra_headers=extra_headers)
-                        summary.bullet(f"{platform_name}: git lfs objects pushed")
 
                     client.post_push_finalize(target, repo_data, summary)
 
