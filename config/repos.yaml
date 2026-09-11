@@ -105,6 +105,23 @@ repos:
         rewrite_readme_links: true
         sync_releases: true
 
+  - id: cann-docs
+    source:
+      full_name: KaranocaVe/cann-docs
+      private: true
+    lfs: true
+    release_limit: 1
+    targets:
+      gitee:
+        enabled: false
+      gitcode:
+        enabled: true
+        namespace: karanocave
+        name: cann-docs
+        visibility: private
+        rewrite_readme_links: false
+        sync_releases: false
+
 # Example entry:
 # repos:
 #   - id: upstream-example
